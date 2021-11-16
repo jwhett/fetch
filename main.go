@@ -1,98 +1,105 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"net/http"
 	"os"
 	"regexp"
-	"strconv"
 	"strings"
-	"sync"
+	"time"
 )
 
 var ignoreImages = regexp.MustCompile(`(jpg|png|gif|\.js|\.aspx)`)
 var siteMatch = regexp.MustCompile(`(http|https)://[a-zA-Z0-9./?=_%:-]*`)
 
-type SiteTracker struct {
-    mut sync.Mutex
-    sites map[string]string
-}
+var target string
+var duration int
+var conc int
 
-func (st *SiteTracker) Add(url, body string) {
-    st.mut.Lock()
-    defer st.mut.Unlock()
-    if _, ok := st.sites[url]; !ok {
-        st.sites[url] = body
-    }
-}
-
-func (st *SiteTracker) PrintSites() {
-    var str string
-    for url := range st.sites {
-        str += fmt.Sprintf("%s ", url)
-    }
-    fmt.Println(str)
-}
-
-func Fetch(baseurl, url string, depth int, wg *sync.WaitGroup, st *SiteTracker, gd *chan struct{}) {
-    defer wg.Done()
-    // get a token
-    *gd<- struct{}{}
-    // release a token when we're done
-    defer func(){ <-*gd }()
-
-    if depth == 0 {
-        return
-    }
-    depth--
-
-	resp, err := http.Get(url)
-	if err != nil {
-    	fmt.Fprintf(os.Stderr, "couldn't get %s: %v\n", url, err)
-		return 
-	}
-
-    b, err := ioutil.ReadAll(resp.Body)
-	resp.Body.Close()
-	if err != nil {
-    	fmt.Fprintf(os.Stderr, "couldn't read body for %s: %v\n", url, err)
-		return 
-	}
-
-	st.Add(url, string(b))
-
-	matches := siteMatch.FindAllString(string(b), -1)
-	for _, match := range matches {
-		if !ignoreImages.MatchString(match) && strings.HasPrefix(match, baseurl){
-    		wg.Add(1)
-    		go Fetch(baseurl, match, depth, wg, st, gd)
-		}
-	}
+func init() {
+	flag.StringVar(&target, "target", "", "target baseurl to crawl")
+	flag.IntVar(&duration, "duration", 5, "how long to crawl")
+	flag.IntVar(&conc, "conc", 10, "number of sites to crawl in parallel")
+	flag.Parse()
 }
 
 func main() {
-    if len(os.Args) < 3 {
-        fmt.Println("fetch: not enough args")
-        os.Exit(1)
-    }
+	if len(target) == 0 {
+		fmt.Fprintln(os.Stderr, "Must declare a target")
+		os.Exit(1)
+	}
 
-	url := os.Args[1]
-    depth, err := strconv.Atoi(os.Args[2])
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "fetch: cannot convert depth (%v) to int: %v\n", os.Args[2], err)
-        os.Exit(1)
-    }
+	orc := NewOrchestrator(target, conc)
 
-    var wg sync.WaitGroup
-    tokenBucket := make(chan struct{}, 20)
-    st := SiteTracker{ sites: make(map[string]string) }
+	go func() { orc.worker <- []string{target} }()
 
-    wg.Add(1)
-    go Fetch(url, url, depth, &wg, &st, &tokenBucket)
+	timer := time.After(time.Duration(duration) * time.Second)
 
-    fmt.Fprintln(os.Stderr, "Working...")
-    wg.Wait()
-    st.PrintSites()
-    fmt.Printf("We have site content for %d sites.\n", len(st.sites))
+loop:
+	for {
+		select {
+		case urls := <-orc.worker:
+			for _, url := range urls {
+				if !orc.seen[url] {
+					orc.seen[url] = true
+					fmt.Println(url)
+					go func(url string) {
+						orc.worker <- Fetch(url, orc)
+					}(url)
+				}
+			}
+		case <-timer:
+			break loop
+		}
+	}
+	close(orc.worker)
+}
+
+type Orchestrator struct {
+	seen    map[string]bool
+	tokens  chan struct{}
+	worker  chan []string
+	baseurl string
+}
+
+func NewOrchestrator(b string, p int) *Orchestrator {
+	return &Orchestrator{
+		seen:    make(map[string]bool),
+		tokens:  make(chan struct{}, p),
+		worker:  make(chan []string),
+		baseurl: b,
+	}
+}
+
+func Fetch(url string, o *Orchestrator) []string {
+	// get a token
+	o.tokens <- struct{}{}
+	// release a token when we're done
+	defer func() { <-o.tokens }()
+
+	resp, err := http.Get(url)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "fetch: couldn't get: %v\n", err)
+		resp.Body.Close()
+		return nil
+	}
+
+	b, err := ioutil.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "fetch: couldn't read body: %v\n", err)
+		return nil
+	}
+
+	matches := siteMatch.FindAllString(string(b), -1)
+	var filtered []string
+	for _, match := range matches {
+		// keep the crawling contained
+		if !ignoreImages.MatchString(match) && strings.HasPrefix(match, o.baseurl) {
+			filtered = append(filtered, match)
+		}
+	}
+	return filtered
 }
