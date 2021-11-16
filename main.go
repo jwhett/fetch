@@ -35,8 +35,12 @@ func (st *SiteTracker) PrintSites() {
     fmt.Println(str)
 }
 
-func Fetch(baseurl, url string, depth int, wg *sync.WaitGroup, st *SiteTracker) {
+func Fetch(baseurl, url string, depth int, wg *sync.WaitGroup, st *SiteTracker, gd *chan struct{}) {
     defer wg.Done()
+    // get a token
+    *gd<- struct{}{}
+    // release a token when we're done
+    defer func(){ <-*gd }()
 
     if depth == 0 {
         return
@@ -62,7 +66,7 @@ func Fetch(baseurl, url string, depth int, wg *sync.WaitGroup, st *SiteTracker) 
 	for _, match := range matches {
 		if !ignoreImages.MatchString(match) && strings.HasPrefix(match, baseurl){
     		wg.Add(1)
-    		go Fetch(baseurl, match, depth, wg, st)
+    		go Fetch(baseurl, match, depth, wg, st, gd)
 		}
 	}
 }
@@ -81,10 +85,11 @@ func main() {
     }
 
     var wg sync.WaitGroup
+    tokenBucket := make(chan struct{}, 20)
     st := SiteTracker{ sites: make(map[string]string) }
 
     wg.Add(1)
-    go Fetch(url, url, depth, &wg, &st)
+    go Fetch(url, url, depth, &wg, &st, &tokenBucket)
 
     fmt.Fprintln(os.Stderr, "Working...")
     wg.Wait()
