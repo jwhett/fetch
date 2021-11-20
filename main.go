@@ -73,26 +73,40 @@ func NewOrchestrator(b string, p int) *Orchestrator {
 	}
 }
 
+type UserAgent struct {
+	Allowed    []string
+	Disallowed []string
+}
+
 func Fetch(url string, o *Orchestrator) []string {
 	// get a token
 	o.tokens <- struct{}{}
 	// release a token when we're done
 	defer func() { <-o.tokens }()
 
-	resp, err := http.Get(url)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "fetch: couldn't get: %v\n", err)
-		resp.Body.Close()
-		return nil
-	}
-
-	b, err := ioutil.ReadAll(resp.Body)
-	resp.Body.Close()
+	b, err := GetURL(url)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "fetch: couldn't read body: %v\n", err)
 		return nil
 	}
 
+	return ExtractLinks(b, o)
+}
+
+func GetURL(url string) ([]byte, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "fetch: couldn't get: %v\n", err)
+		resp.Body.Close()
+		return nil, nil
+	}
+
+	b, err := ioutil.ReadAll(resp.Body)
+	resp.Body.Close()
+	return b, err
+}
+
+func ExtractLinks(b []byte, o *Orchestrator) []string {
 	matches := siteMatch.FindAllString(string(b), -1)
 	var filtered []string
 	for _, match := range matches {
