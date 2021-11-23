@@ -20,6 +20,12 @@ var target string
 var duration int
 var conc int
 
+const (
+	NotEnoughArgs = iota
+	RobotError
+	ExplicitDisallow
+)
+
 func init() {
 	flag.StringVar(&target, "target", "", "target baseurl to crawl")
 	flag.IntVar(&duration, "duration", 5, "how long to crawl")
@@ -29,16 +35,35 @@ func init() {
 
 func main() {
 	if len(target) == 0 {
-		fmt.Fprintln(os.Stderr, "Must declare a target")
-		os.Exit(1)
+		fmt.Fprintln(os.Stderr, "fetch: Must declare a target")
+		os.Exit(NotEnoughArgs)
 	}
 
-	orc := NewOrchestrator(target, conc)
+	baseURL := strings.TrimSuffix(target, "/")
+	userAgents, err := GetAndParseRobots(target)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "fetch: Problem with robots.txt: %v\n", err)
+		os.Exit(RobotError)
+	}
 
-	go func() { orc.worker <- []string{target} }()
+	disallowed := make(map[string]bool)
+	for _, agent := range userAgents {
+		if agent.Agent == "*" {
+			for _, suffix := range agent.Disallowed {
+				if suffix == "/" {
+					fmt.Fprintf(os.Stderr, "fetch: cannot crawl %s, explicitly disallowed\n", baseURL)
+					os.Exit(ExplicitDisallow)
+				}
+				disallowed[baseURL+suffix] = true
+			}
+		}
+	}
+
+	orc := NewOrchestrator(baseURL, conc, disallowed)
+
+	go func() { orc.worker <- []string{baseURL} }()
 
 	timer := time.After(time.Duration(duration) * time.Second)
-
 loop:
 	for {
 		select {
@@ -60,18 +85,20 @@ loop:
 }
 
 type Orchestrator struct {
-	seen    map[string]bool
-	tokens  chan struct{}
-	worker  chan []string
-	baseurl string
+	seen       map[string]bool
+	tokens     chan struct{}
+	worker     chan []string
+	baseurl    string
+	disallowed map[string]bool
 }
 
-func NewOrchestrator(b string, p int) *Orchestrator {
+func NewOrchestrator(b string, p int, d map[string]bool) *Orchestrator {
 	return &Orchestrator{
-		seen:    make(map[string]bool),
-		tokens:  make(chan struct{}, p),
-		worker:  make(chan []string),
-		baseurl: b,
+		seen:       make(map[string]bool),
+		tokens:     make(chan struct{}, p),
+		worker:     make(chan []string),
+		baseurl:    b,
+		disallowed: d,
 	}
 }
 
@@ -136,7 +163,7 @@ func GetAndParseRobots(u string) ([]*UserAgent, error) {
 	var agent *UserAgent
 	var userAgents []*UserAgent
 	var directive, value string
-	data, err := GetURL(u)
+	data, err := GetURL(u + "/robots.txt")
 	if err != nil {
 		return nil, err
 	}
