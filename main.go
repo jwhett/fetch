@@ -101,7 +101,7 @@ func Fetch(url string, o *Orchestrator) []string {
 
 	b, err := GetURL(url)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "fetch: couldn't read body: %v\n", err)
+		fmt.Fprintf(os.Stderr, "fetch: couldn't read url: %v\n", err)
 		return nil
 	}
 
@@ -110,12 +110,11 @@ func Fetch(url string, o *Orchestrator) []string {
 
 func GetURL(url string) ([]byte, error) {
 	resp, err := http.Get(url)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "fetch: couldn't get: %v\n", err)
+	if err != nil || !strings.HasSuffix(resp.Status, "OK") {
+		fmt.Fprintf(os.Stderr, "fetch: couldn't get: %s\nStatus: %s\nError: %v\n", url, resp.Status, err)
 		resp.Body.Close()
-		return nil, nil
+		return nil, fmt.Errorf("fetch: couldn't get: %s\nStatus: %s\nError: %v\n", url, resp.Status, err)
 	}
-
 	b, err := ioutil.ReadAll(resp.Body)
 	resp.Body.Close()
 	return b, err
@@ -133,34 +132,31 @@ func ExtractLinks(b []byte, o *Orchestrator) []string {
 	return filtered
 }
 
-func GetAndParseRobots(u string) []*UserAgent {
+func GetAndParseRobots(u string) ([]*UserAgent, error) {
 	var agent *UserAgent
-	var agents []*UserAgent
+	var userAgents []*UserAgent
 	var directive, value string
 	data, err := GetURL(u)
 	if err != nil {
-		// assume they don't have a robots.txt
-		return agents
+		return nil, err
 	}
 	dataReader := bytes.NewReader(data)
 	for {
 		if _, err := fmt.Fscanln(dataReader, &directive, &value); err != nil {
 			if err == io.EOF {
-				agents = append(agents, agent)
+				userAgents = append(userAgents, agent)
 				break
 			}
-			// parse as much as possible
 			continue
 		}
 		switch strings.ToLower(directive) {
 		case "user-agent:":
 			{
 				if agent != nil && agent.Agent != value {
-					// store old & make new
-					agents = append(agents, agent)
-					continue
+					userAgents = append(userAgents, agent)
 				}
 				agent = NewUserAgent(value)
+
 			}
 		case "allow:":
 			agent.AddAllowed(value)
@@ -168,5 +164,5 @@ func GetAndParseRobots(u string) []*UserAgent {
 			agent.AddDisallowed(value)
 		}
 	}
-	return agents
+	return userAgents, nil
 }
