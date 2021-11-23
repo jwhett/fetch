@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"os"
@@ -74,8 +76,21 @@ func NewOrchestrator(b string, p int) *Orchestrator {
 }
 
 type UserAgent struct {
+	Agent      string
 	Allowed    []string
 	Disallowed []string
+}
+
+func (ua *UserAgent) AddAllowed(a string) {
+	ua.Allowed = append(ua.Allowed, a)
+}
+
+func (ua *UserAgent) AddDisallowed(d string) {
+	ua.Disallowed = append(ua.Disallowed, d)
+}
+
+func NewUserAgent(agent string) *UserAgent {
+	return &UserAgent{Agent: agent}
 }
 
 func Fetch(url string, o *Orchestrator) []string {
@@ -116,4 +131,42 @@ func ExtractLinks(b []byte, o *Orchestrator) []string {
 		}
 	}
 	return filtered
+}
+
+func GetAndParseRobots(u string) []*UserAgent {
+	var agent *UserAgent
+	var agents []*UserAgent
+	var directive, value string
+	data, err := GetURL(u)
+	if err != nil {
+		// assume they don't have a robots.txt
+		return agents
+	}
+	dataReader := bytes.NewReader(data)
+	for {
+		if _, err := fmt.Fscanln(dataReader, &directive, &value); err != nil {
+			if err == io.EOF {
+				agents = append(agents, agent)
+				break
+			}
+			// parse as much as possible
+			continue
+		}
+		switch strings.ToLower(directive) {
+		case "user-agent:":
+			{
+				if agent != nil && agent.Agent != value {
+					// store old & make new
+					agents = append(agents, agent)
+					continue
+				}
+				agent = NewUserAgent(value)
+			}
+		case "allow:":
+			agent.AddAllowed(value)
+		case "disallow:":
+			agent.AddDisallowed(value)
+		}
+	}
+	return agents
 }
