@@ -69,7 +69,7 @@ loop:
 		select {
 		case urls := <-orc.worker:
 			for _, url := range urls {
-				if !orc.seen[url] {
+				if !orc.seen[url] && !orc.disallowed[url] {
 					orc.seen[url] = true
 					fmt.Println(url)
 					go func(url string) {
@@ -132,6 +132,7 @@ func Fetch(url string, o *Orchestrator) []string {
 		return nil
 	}
 
+	time.Sleep(10 * time.Second)
 	return ExtractLinks(b, o)
 }
 
