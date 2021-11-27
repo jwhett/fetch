@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/xml"
 	"flag"
 	"fmt"
 	"io"
@@ -24,6 +25,7 @@ const (
 	NotEnoughArgs = iota
 	RobotError
 	ExplicitDisallow
+	SuccesfulSiteMap
 )
 
 func init() {
@@ -190,7 +192,45 @@ func GetAndParseRobots(u string) ([]*UserAgent, error) {
 			agent.AddAllowed(value)
 		case "disallow:":
 			agent.AddDisallowed(value)
+		case "sitemap:":
+			count, siteMap := ReadSiteMap(value)
+			fmt.Fprintf(os.Stderr, "Found %d links from the site map. Crawl skipped.\n", count)
+			for _, site := range siteMap.Urls {
+				fmt.Println(site.Location)
+			}
+			os.Exit(SuccesfulSiteMap)
 		}
 	}
 	return userAgents, nil
+}
+
+type SiteMap struct {
+	XMLName xml.Name `xml:"urlset"`
+	Urls    []Url    `xml:"url"`
+}
+
+type Url struct {
+	XMLName    xml.Name `xml:"url"`
+	Location   string   `xml:"loc"`
+	LastMod    string   `xml:"lastmod"`
+	ChangeFreq string   `xml:"changefreq"`
+}
+
+func ReadSiteMap(u string) (int, SiteMap) {
+	var client http.Client
+	client.Timeout = 30 * time.Second
+	xmlResponse, err := client.Get(u)
+	if err != nil {
+		fmt.Printf("Error getting site map! %v", err)
+		xmlResponse.Body.Close()
+		os.Exit(1)
+	}
+
+	xmlData, err := ioutil.ReadAll(xmlResponse.Body)
+	xmlResponse.Body.Close()
+
+	var siteMap SiteMap
+	xml.Unmarshal(xmlData, &siteMap)
+
+	return len(siteMap.Urls), siteMap
 }
