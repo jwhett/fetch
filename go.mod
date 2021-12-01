@@ -1,3 +1,3 @@
-module github.com/jwhett/fetch
+module fetch
 
 go 1.17
