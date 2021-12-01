@@ -7,19 +7,25 @@ import (
 	"strings"
 	"time"
 
-	"fetch/orchestration"
-	"fetch/fetcher"
 	fe "fetch/errors"
+	"fetch/fetcher"
+	"fetch/orchestration"
 )
 
+// target is the target URL. This becomes the base URL.
 var target string
+
+// duration is how long the crawler will work before
+// terminating.
 var duration int
+
+// conc is the maximum number of concurrent workers.
 var conc int
 
 func init() {
 	flag.StringVar(&target, "target", "", "target baseurl to crawl")
-	flag.IntVar(&duration, "duration", 5, "how long to crawl")
-	flag.IntVar(&conc, "conc", 10, "number of sites to crawl in parallel")
+	flag.IntVar(&duration, "duration", 5, "how long to crawl before terminating")
+	flag.IntVar(&conc, "conc", 10, "number of concurrent workers")
 	flag.Parse()
 }
 
@@ -73,5 +79,3 @@ loop:
 	}
 	close(orc.Worker)
 }
-
-
